@@ -2,35 +2,52 @@ package test;
 
 import io.qameta.allure.Description;
 import io.qameta.allure.Step;
+import io.restassured.RestAssured;
+import io.restassured.response.ValidatableResponse;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-import static io.restassured.RestAssured.given;
-import static org.hamcrest.Matchers.greaterThanOrEqualTo;
-import static org.hamcrest.Matchers.hasSize;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Properties;
+import static org.assertj.core.api.Assertions.assertThat;
 
-class GetOrderTest {
+// Импортируем POJO-классы
+import models.Order;
+import models.ResponseBody;
 
-    // API URL
-    private final String BASE_URL = "https://qa-scooter.praktikum-services.ru/api/v1";
-    private final String ORDERS_ENDPOINT = "/orders";
+public class GetOrderTest {
 
-    // Тест получения заказов
-    @Test
-    @Description("Проверка получения списка заказов")
-    public void getOrdersTest() {
-        makeGetRequest(); // Выделяем отправку запроса в отдельный метод
+    // ENDPOINT запроса получения списка заказов
+    private static final String ORDERS_ENDPOINT = "/orders";
+
+    // Загружаем baseURI из config.properties
+    @BeforeAll
+    public static void setup() throws IOException {
+        Properties props = new Properties();
+        InputStream input = GetOrderTest.class.getClassLoader().getResourceAsStream("config.properties");
+        if (input != null) {
+            props.load(input);
+            String baseUrl = props.getProperty("base.url");
+            RestAssured.baseURI = baseUrl;
+        } else {
+            throw new RuntimeException("Файл config.properties не найден.");
+        }
     }
 
-    // Отправка запроса на получение заказов
-    @Step("Делаем запрос на получение заказов с лимитом 2 и первой страницей")
-    private void makeGetRequest() {
-        given()
-                .baseUri(BASE_URL)
-                .queryParam("limit", 2) // Лимит: 2 заказа
-                .queryParam("page", 0)  // Страница: первая страница
-                .when()
-                .get(ORDERS_ENDPOINT)
-                .then()
-                .statusCode(200) // Проверяем успешный статус
-                .body("orders", hasSize(greaterThanOrEqualTo(1))); // Проверяем, что список заказов не пустой
+    @Test
+    @Description("Проверка, что список заказов не пустой")
+    @Step("Получение списка заказов")
+    public void simpleGetOrdersTest() {
+        ValidatableResponse response =
+                RestAssured.given()
+                        .queryParam("limit", 2)
+                        .queryParam("page", 0)
+                        .when()
+                        .get(ORDERS_ENDPOINT)
+                        .then()
+                        .statusCode(200);
+
+        ResponseBody responseBody = response.extract().as(ResponseBody.class);
+        assertThat(responseBody.getOrders()).isNotNull().isNotEmpty();
     }
 }
