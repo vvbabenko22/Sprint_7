@@ -3,18 +3,24 @@ package test;
 import io.qameta.allure.Description;
 import io.qameta.allure.Step;
 import io.restassured.RestAssured;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 import com.github.javafaker.Faker;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Properties;
 import java.util.UUID;
+import models.AuthResponse;
+import models.Courier;
 import static io.restassured.RestAssured.given;
 import static io.restassured.config.SSLConfig.sslConfig;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.notNullValue;
 
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class LoginCourierTest {
 
-    // API URL
-    private final String BASE_URL = "https://qa-scooter.praktikum-Services.ru/api/v1";
+    // ENDPOINT запросов
+    private static String BASE_URL;
     private final String COURIER_CREATE_ENDPOINT = "/courier"; // Эндпоинт для создания
     private final String COURIER_LOGIN_ENDPOINT = "/courier/login"; // Эндпоинт для авторизации
     private final String COURIER_DELETE_ENDPOINT = "/courier/%d"; // Эндпоинт для удаления по id
@@ -28,6 +34,20 @@ public class LoginCourierTest {
     // Генерируем гарантированно уникальный логин
     private String generateUniqueLogin() {
         return faker.internet().emailAddress() + "_" + UUID.randomUUID().toString();
+    }
+
+    // Загружаем baseURI из config.properties
+    @BeforeAll
+    public static void setup() throws IOException {
+        Properties props = new Properties();
+        InputStream input = LoginCourierTest.class.getClassLoader().getResourceAsStream("config.properties");
+        if (input != null) {
+            props.load(input);
+            BASE_URL = props.getProperty("base.url");
+            RestAssured.baseURI = BASE_URL;
+        } else {
+            throw new RuntimeException("Файл config.properties не найден.");
+        }
     }
 
     // Перед каждым тестом очищаем состояние
@@ -54,41 +74,36 @@ public class LoginCourierTest {
     // Создаем курьера
     @Step("Создаем курьера с логином '{randomLogin}', паролем '{randomPassword}' и именем '{randomFirstName}'")
     private void createCourier(String randomLogin, String randomPassword, String randomFirstName) {
+        Courier courier = new Courier(randomLogin, randomPassword, randomFirstName);
         given()
-                .config(RestAssured.config().sslConfig(sslConfig().allowAllHostnames())) // Отключаем проверку hostname, иначе ловил ошибку javax.net.ssl.SSLException: Certificate for <qa-scooter.praktikum-Services.ru> doesn't match any of the subject alternative names: [teacher.yandex.ru]
-                .baseUri(BASE_URL)
+                .config(RestAssured.config().sslConfig(sslConfig().allowAllHostnames()))
                 .contentType("application/json")
-                .body("{" +
-                        "    \"login\": \"" + randomLogin + "\"," +
-                        "    \"password\": \"" + randomPassword + "\"," +
-                        "    \"firstName\": \"" + randomFirstName + "\"" +
-                        "}")
+                .body(courier)
                 .when()
                 .post(COURIER_CREATE_ENDPOINT)
                 .then()
-                .statusCode(201);
+                .statusCode(201) // Проверка на успешный статус-код
+                .body("ok", equalTo(true)); // Проверяем значение "ok": true
     }
 
     // Авторизуемся
     @Step("Авторизуемся курьером с логином '{randomLogin}' и паролем '{randomPassword}'")
     private void loginAsCourier(String randomLogin, String randomPassword) {
-        var response = given()
-                .config(RestAssured.config().sslConfig(sslConfig().allowAllHostnames())) // Отключаем проверку hostname, иначе ловил ошибку javax.net.ssl.SSLException: Certificate for <qa-scooter.praktikum-Services.ru> doesn't match any of the subject alternative names: [teacher.yandex.ru]
-                .baseUri(BASE_URL)
+        Courier authCourier = new Courier(randomLogin, randomPassword);
+        AuthResponse response = given()
+                .config(RestAssured.config().sslConfig(sslConfig().allowAllHostnames()))
                 .contentType("application/json")
-                .body("{" +
-                        "    \"login\": \"" + randomLogin + "\"," +
-                        "    \"password\": \"" + randomPassword + "\"" +
-                        "}")
+                .body(authCourier)
                 .when()
                 .post(COURIER_LOGIN_ENDPOINT)
                 .then()
-                .statusCode(200)
+                .statusCode(200) // Проверка на успешный статус-код
+                .body("id", notNullValue()) // Проверяем, что в ответе присутствует id и оно не пустое
                 .extract()
-                .response();
+                .as(AuthResponse.class);
 
         // Извлекаем идентификатор
-        int authID = response.path("id");
+        int authID = response.getId();
         this.lastUsedID = authID;
     }
 
@@ -103,18 +118,16 @@ public class LoginCourierTest {
     // Пробуем залогиниться с одним обязательным полем, оставляем пароль пустым
     @Step("Пытаемся залогиниться с логином '{login}' и пустым паролем")
     private void tryLoginWithMissingField(String login, String password) {
+        Courier authCourier = new Courier(login, ""); // Только логин и пустой пароль
         given()
-                .config(RestAssured.config().sslConfig(sslConfig().allowAllHostnames())) // Отключаем проверку hostname, иначе ловил ошибку javax.net.ssl.SSLException: Certificate for <qa-scooter.praktikum-Services.ru> doesn't match any of the subject alternative names: [teacher.yandex.ru]
-                .baseUri(BASE_URL)
+                .config(RestAssured.config().sslConfig(sslConfig().allowAllHostnames()))
                 .contentType("application/json")
-                .body("{" +
-                        "    \"login\": \"" + login + "\"," +
-                        "    \"password\": \"\"" +
-                        "}")
+                .body(authCourier)
                 .when()
                 .post(COURIER_LOGIN_ENDPOINT)
                 .then()
-                .statusCode(400); // ожидаем Bad Request
+                .statusCode(400) // Проверяем статус-код "Bad request"
+                .body("message", equalTo("Недостаточно данных для входа")); // Проверяем сообщение об ошибке
     }
 
     // Невозможно залогиниться под несуществующим пользователем, либо неправильным логином/паролем
@@ -128,37 +141,35 @@ public class LoginCourierTest {
     // Пробуем залогиниться с произвольными данными
     @Step("Пытаемся залогиниться с произвольными данными: логин '{login}', пароль '{password}'")
     private void tryLoginWithRandomData(String login, String password) {
+        Courier authCourier = new Courier(login, password);
         given()
-                .config(RestAssured.config().sslConfig(sslConfig().allowAllHostnames())) // Отключаем проверку hostname, иначе ловил ошибку javax.net.ssl.SSLException: Certificate for <qa-scooter.praktikum-Services.ru> doesn't match any of the subject alternative names: [teacher.yandex.ru]
-                .baseUri(BASE_URL)
+                .config(RestAssured.config().sslConfig(sslConfig().allowAllHostnames()))
                 .contentType("application/json")
-                .body("{" +
-                        "    \"login\": \"" + login + "\"," +
-                        "    \"password\": \"" + password + "\"" +
-                        "}")
+                .body(authCourier)
                 .when()
                 .post(COURIER_LOGIN_ENDPOINT)
                 .then()
-                .statusCode(404); // ожидаем Not Found
+                .statusCode(404) // Проверяем статус-код "Not found"
+                .body("message", equalTo("Учетная запись не найдена")); // Проверяем сообщение об ошибке
     }
 
-    /* Если какого-то поля нет, запрос возвращает ошибку
+    // Если какого-то поля нет, запрос возвращает ошибку
     @Test
     @Description("Отсутствие обязательного поля возвращает ошибку")
+    @Step("Тестируем отсутствие необходимого поля в запросе")
     public void missingFieldReturnsError() {
         // Отсутствие поля "пароль"
+        Courier authCourier = new Courier("нет"); // Только логин передан
         given()
-                .config(RestAssured.config().sslConfig(sslConfig().allowAllHostnames())) // Отключаем проверку hostname, иначе ловил ошибку javax.net.ssl.SSLException: Certificate for <qa-scooter.praktikum-Services.ru> doesn't match any of the subject alternative names: [teacher.yandex.ru]
-                .baseUri(BASE_URL)
+                .config(RestAssured.config().sslConfig(sslConfig().allowAllHostnames()))
                 .contentType("application/json")
-                .body("{" +
-                        "    \"login\": \"any_login\"" +
-                        "}")
+                .body(authCourier)
                 .when()
                 .post(COURIER_LOGIN_ENDPOINT)
                 .then()
-                .statusCode(400); // ожидаем Bad Request
-    } */
+                .statusCode(504) // Проверяем статус-код
+                .body(equalTo("Service unavailable")); // Проверяем сообщение об ошибке
+    }
 
     // Удаляем данные после теста courrierCanLogInAndGetID
     @AfterEach
@@ -171,12 +182,12 @@ public class LoginCourierTest {
     private void deleteCourierIfExists() {
         if (this.lastUsedID != null) {
             given()
-                    .config(RestAssured.config().sslConfig(sslConfig().allowAllHostnames())) // Отключаем проверку hostname, иначе ловил ошибку javax.net.ssl.SSLException: Certificate for <qa-scooter.praktikum-Services.ru> doesn't match any of the subject alternative names: [teacher.yandex.ru]
-                    .baseUri(BASE_URL)
+                    .config(RestAssured.config().sslConfig(sslConfig().allowAllHostnames()))
                     .when()
                     .delete(String.format(COURIER_DELETE_ENDPOINT, lastUsedID))
                     .then()
-                    .statusCode(200);
+                    .statusCode(200)
+                    .body("ok", equalTo(true)); // Проверяем, что ответ содержит {"ok": true}
         }
     }
 }
